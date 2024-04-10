@@ -25,7 +25,7 @@ class Simulator(sl.Simulator):
                 self.int_priors[key].maximum = self.bounds[key][1]
             for key in self.ext_priors.keys():
                 self.ext_priors[key].minimum = self.bounds[key][0]
-                self.ext_priors[key].maximum = self.bounds[key][0]
+                self.ext_priors[key].maximum = self.bounds[key][1]
         waveform_generator = WaveformGenerator(
             duration=self.waveform_arguments["duration"],
             start_time=self.waveform_arguments["start"],
