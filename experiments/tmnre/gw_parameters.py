@@ -14,9 +14,9 @@ sourced = dict(
 
 waveform_params = dict(
     sampling_frequency = 2048,
-    duration = 4,
-    start_offset = 2,
-    start = -2,
+    duration = 4.0,
+    start_offset = 2.0,
+    start = -2.0,
     waveform_apprx = 'SEOBNRv4PHM',
     minimum_frequency = 20,
     maximum_frequency = 1024,
@@ -26,15 +26,11 @@ waveform_params = dict(
 )
 
 default_injection = dict(
-    mass_1 = 39.536,
-    mass_2 = 34.872,
+    #mass_1 = 39.536,
+    #mass_2 = 34.872,
     mass_ratio = 0.8858,
     chirp_mass = 32.14,
-    luminosity_distance = 200,
-    dec = 0.071,
-    ra = 5.556,
     theta_jn = 0.4432,
-    psi = 1.100,
     phase = 5.089,
     tilt_1 = 1.497,
     tilt_2 = 1.102,
@@ -42,20 +38,20 @@ default_injection = dict(
     a_2 = 0.8118,
     phi_12 = 6.220,
     phi_jl = 1.885,
+    luminosity_distance = 200.0,
+    dec = 0.071,
+    ra = 5.556,
+    psi = 1.100,
     geocent_time = 0.0,
 )
 
-intrinsic_variables = ['mass_ratio', 'chirp_mass', 'luminosity_distance', 'dec', 'ra', 'theta_jn', 'psi', 'phase', 'tilt_1', 'tilt_2']
-extrinsic_variables = ['a_1', 'a_2', 'phi_12', 'phi_jl', 'geocent_time']
+intrinsic_variables = ['mass_ratio', 'chirp_mass', 'theta_jn', 'phase', 'tilt_1', 'tilt_2', 'a_1', 'a_2', 'phi_12', 'phi_jl']
+extrinsic_variables = ['luminosity_distance', 'dec', 'ra', 'psi', 'geocent_time']
 
 limits = dict(
     mass_ratio = [0.125, 1.0],
-    chirp_mass = [25, 100],
-    luminosity_distance = [100, 1500],
-    dec = [-1.57079, 1.57079],
-    ra = [0.0, 6.28318],
+    chirp_mass = [25.0, 100.0],
     theta_jn = [0.0, 3.14159],
-    psi = [0.0, 3.14159],
     phase = [0.0, 6.28318],
     tilt_1 = [0.0, 3.14159],
     tilt_2 = [0.0, 3.14159],
@@ -63,6 +59,10 @@ limits = dict(
     a_2 = [0.05, 1.0],
     phi_12 = [0.0, 6.28318],
     phi_jl = [0.0, 6.28318],
+    luminosity_distance = [100, 1500],
+    dec = [-1.57079, 1.57079],
+    ra = [0.0, 6.28318],
+    psi = [0.0, 3.14159],
     geocent_time = [-0.1, 0.1],
 )
 

@@ -1,5 +1,7 @@
 import numpy as np
+import random
 
+from pytorch_lightning.utilities.seed import seed_everything
 import swyft
 import swyft.lightning as sl
 
@@ -36,6 +38,18 @@ class Simulator(sl.Simulator):
         )
         self.waveform_generator = waveform_generator
         self.transform_samples = swyft.to_numpy32
+        
+        print(
+            self.injection_parameters, 
+            self.waveform_arguments,
+            self.ifo_list,
+            self.fd_source_model,
+            self.param_conversion_model,
+            self.priors,
+            self.int_priors,
+            self.ext_priors,
+            self.bounds,
+            self.waveform_generator)
 
     def generate_observation(self):
         params = self.injection_parameters.copy()

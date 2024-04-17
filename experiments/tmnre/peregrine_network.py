@@ -1,13 +1,16 @@
-import numpy as np
-import os
+
 import torch
 from torch import nn
 from torch.functional import F
-import pickle
+
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 import swyft.lightning as sl
+
+import logging
+logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.WARNING)
+logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.WARNING)
 
 
 class InferenceNetwork(sl.SwyftModule):
@@ -40,8 +43,15 @@ class InferenceNetwork(sl.SwyftModule):
         self.logratios_1d = sl.LogRatioEstimator_1dim(
             num_features=32, num_params=int(self.num_params), varnames="z_total"
         )
-
-        #self.optimizer_init = sl.AdamOptimizerInit(lr=conf["learning_rate"])
+        
+        if not self.one_d_only:
+            self.linear_t_2d = LinearCompression_2d()
+            self.linear_f_2d = LinearCompression_2d()
+            self.logratios_2d = sl.LogRatioEstimator_Ndim(
+                num_features=256, marginals=self.marginals, varnames="z_total"
+            )
+            
+        self.optimizer_init = sl.AdamOptimizerInit(lr=conf["learning_rate"])
 
     def forward(self, A, B):
         if self.noise_shuffling and A["d_t"].size(0) != 1:

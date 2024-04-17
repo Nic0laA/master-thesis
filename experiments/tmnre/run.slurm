@@ -2,13 +2,11 @@
 
 #SBATCH --partition=gpu
 #SBATCH --gpus=1
-#SBATCH --job-name=peregrine
+#SBATCH --job-name=peregrine_me
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=slurm_output_%A.out
-
-export DISABLE_TQDM=True
 
 # Select python version
 python="/home/scur2012/Thesis/Peregrine/.venv/bin/python3.12"

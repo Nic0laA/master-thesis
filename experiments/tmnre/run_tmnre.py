@@ -1,4 +1,5 @@
 
+import os
 import numpy as np
 import pandas as pd
 import glob
@@ -6,14 +7,18 @@ import warnings
 warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
 import multiprocessing
 import pickle
+import time
+import subprocess
 from loguru import logger
-import swyft.lightning as sl
+from random import random
 
 import torch
 torch.set_float32_matmul_precision('high')
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.utilities.seed import seed_everything as set_torch_seed
+import swyft.lightning as sl
 
 import gw_parameters
 import peregrine_simulator
@@ -34,7 +39,7 @@ importlib.reload(peregrine_network)
 
 # Set up log
 zarr_store_dirs = '/scratch-shared/scur2012/peregrine_data/tmnre_experiments'
-name_of_run = 'test2'
+name_of_run = 'peregrine_copy_highSNR_v3'
 logger.add(f"{zarr_store_dirs}/{name_of_run}/run_log.txt")
 
 # Initialise configuration settings
@@ -44,8 +49,8 @@ logger.info(f'Loading configuration settings for run {name_of_run}')
 conf = gw_parameters.default_conf
 bounds = gw_parameters.limits
 
-logger.info(f'Starting bounds for priors')
-logger.info(f'\n{pd.DataFrame.from_dict(bounds, orient='index', columns=['min','max'])}')
+bounds_df = pd.DataFrame.from_dict(bounds, orient='index', columns=['min','max'])
+logger.info(f'Starting bounds for priors\n{bounds_df}')
 
 # Load swyft-based simulator. 
 # This builds the framework for the computational DAG
@@ -66,7 +71,7 @@ obs_sample = sl.Sample(
 
 ############################################################################################
 #
-# STEP TWO: BEGIN ROUNDS OF TRAINING NETWORK
+# STEP TWO: RUN SIMULATIONS
 #
 ############################################################################################
 
@@ -89,31 +94,64 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     simulation_store_path = f"{zarr_store_dirs}/{name_of_run}/simulations/round_{rnd_id+1}"
 
     chunk_size = 1000
+    
     zarr_store = sl.ZarrStore(f"{simulation_store_path}")
+
     zarr_store.init(
-        N=number_of_simulations, 
-        chunk_size=chunk_size, 
+        N=number_of_simulations,
+        chunk_size=chunk_size,
         shapes=shapes,
         dtypes=dtypes)
-
+        
     # Generate the random observations and save the data to the zarr store (multiprocessing)
 
-    njobs = 16
-    batches = [chunk_size] * ( number_of_simulations // chunk_size ) + [number_of_simulations % chunk_size]
-
     def populate_zarr_simulation(n_sims):
+        
         zarr_store.simulate(
             sampler=swyft_simulator,
-            batch_size=n_sims,
+            batch_size=chunk_size,
             max_sims=n_sims,
         )
 
     logger.info(f'Starting {number_of_simulations} simulations in round {rnd_id+1}')
 
-    # Creating a pool of worker processes
-    with multiprocessing.Pool(njobs) as pool:
-        results = pool.map(populate_zarr_simulation, batches)
+    njobs = 18
+    # batches = [chunk_size] * ( number_of_simulations // chunk_size ) + [number_of_simulations % chunk_size]
 
+    # Creating a pool of worker processes
+    # with multiprocessing.Pool(njobs) as pool:
+    #     results = pool.map(populate_zarr_simulation, batches)
+
+    # import concurrent
+    # with concurrent.futures.ThreadPoolExecutor(max_workers=njobs) as executor:
+    #     for batch_sims in batches:
+    #         executor.submit(populate_zarr_simulation, batch_sims)
+
+
+    # Single thread run (multi-processing duplicates simulations)
+    # populate_zarr_simulation(number_of_simulations)
+    # zarr_store.simulate(sampler=swyft_simulator, batch_size=chunk_size)
+
+    # Launch additional processes for parrallel simulations
+    args = [f'--{par} {bounds[par][0]} {bounds[par][1]}'.split(' ') for par in bounds.keys()]
+    flat_args = [item for row in args for item in row]
+    processes = []
+    for job in range(njobs):
+        p = subprocess.Popen([
+            "/home/scur2012/Thesis/Peregrine/.venv/bin/python3.12",
+            "launch_simulations.py",
+            simulation_store_path,
+        ] + flat_args)
+        processes.append(p) 
+    for p in processes:
+        p.wait()
+    
+    ############################################################################################
+    #
+    # STEP THREE: TRAIN NETWORK FROM SIMULATIONS
+    #
+    ############################################################################################
+                
     # Initialise data loader for training network
 
     logger.info(f'Initialising data loader for round {rnd_id+1}')
@@ -133,7 +171,7 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
             int_priors = conf['priors']['int_priors'],
             ext_priors = conf['priors']['ext_priors'],
         ),
-        marginals = (0,1),
+        marginals = ((0, 1),),
         one_d_only = True,
         ifo_list = conf["waveform_params"]["ifo_list"],
     )
@@ -175,9 +213,12 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
         filename="{epoch}_{val_loss:.2f}_{train_loss:.2f}" + f"_round_{rnd_id+1}",
         mode="min",
     )
+    
+    # Make directory for logger
+    os.makedirs(f'{training_store_path}/logs', exist_ok=True)
     logger_tbl = pl_loggers.TensorBoardLogger(
         save_dir=f"{training_store_path}",
-        name=f"test_round_{rnd_id+1}",
+        name=f"logs",
         version=None,
         default_hp_metric=False,
     )
@@ -189,6 +230,7 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
         max_epochs=network_settings["max_epochs"],
         logger=logger_tbl,
         callbacks=[lr_monitor, early_stopping_callback, checkpoint_callback],
+        enable_progress_bar = False
     )
 
     # Load network model
@@ -196,6 +238,9 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     logger.info(f'Initialising network for round {rnd_id+1}')
     
     network = InferenceNetwork(network_settings)
+    
+    #from inference_utils import init_network
+    #network = init_network(network_settings)
 
     # Fit data to model
     
@@ -227,10 +272,11 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
         prior_samples)
 
     # Save results
+    os.makedirs(f"{zarr_store_dirs}/{name_of_run}/logratios", exist_ok = True)
     with open(f"{zarr_store_dirs}/{name_of_run}/logratios/round_{rnd_id+1}.pickle", 'wb') as p:
         pickle.dump(logratios, p)
     
-    logger.info(f'Updating bounds for round {rnd_id+1}')
+    logger.info(f'Updating bounds for round {rnd_id+2}')
     
     # Update the bounds
     par_names = gw_parameters.intrinsic_variables + gw_parameters.extrinsic_variables
@@ -238,9 +284,10 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     new_bounds = sl.bounds.get_rect_bounds(logratios, 1e-5).bounds.squeeze(1).numpy()
     for i,pname in enumerate(par_names):
         bounds[pname] = list(new_bounds[i])
-        
-    logger.info(f'New bounds for round {rnd_id+1}')
-    logger.info(f'\n{pd.DataFrame(bounds, columns=['min','max'], index=par_names)}')
-     
+    
+    bounds_df = pd.DataFrame.from_dict(bounds, orient='index', columns=['min','max'])
+    logger.info(f'New bounds for round {rnd_id+2}\n{bounds_df}')
+
     # Save the bounds
-    np.savetxt(f"{zarr_store_dirs}/{name_of_run}/bounds/round_{rnd_id+1}.txt", new_bounds)
+    os.makedirs(f"{zarr_store_dirs}/{name_of_run}/bounds", exist_ok = True)
+    bounds_df.to_csv(f"{zarr_store_dirs}/{name_of_run}/bounds/round_{rnd_id+1}.csv")
