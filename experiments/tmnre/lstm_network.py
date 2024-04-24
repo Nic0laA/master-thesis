@@ -20,18 +20,34 @@ class InferenceNetwork(sl.SwyftModule):
             conf["priors"]["ext_priors"].keys()
         )
         self.marginals = conf["marginals"]
-        self.unet_t = Unet(
-            n_in_channels=len(conf["ifo_list"]),
-            n_out_channels=1,
-            sizes=(16, 32, 64, 128, 256),
-            down_sampling=(8, 8, 8, 8),
+        # self.unet_t = Unet(
+        #     n_in_channels=len(conf["ifo_list"]),
+        #     n_out_channels=1,
+        #     sizes=(16, 32, 64, 128, 256),
+        #     down_sampling=(8, 8, 8, 8),
+        # )
+        # self.unet_f = Unet(
+        #     n_in_channels=2 * len(conf["ifo_list"]),
+        #     n_out_channels=1,
+        #     sizes=(16, 32, 64, 128, 256),
+        #     down_sampling=(2, 2, 2, 2),
+        # )
+        
+        self.netw_t = nn.LSTM(
+            input_size = 8192, 
+            hidden_size = 64,
+            num_layers = 2,
+            batch_first=True
         )
-        self.unet_f = Unet(
-            n_in_channels=2 * len(conf["ifo_list"]),
-            n_out_channels=1,
-            sizes=(16, 32, 64, 128, 256),
-            down_sampling=(2, 2, 2, 2),
+
+        self.netw_f = nn.LSTM(
+            input_size = 4097, 
+            hidden_size = 64,
+            num_layers = 2,
+            batch_first=True
         )
+        
+        self.pool = nn.AdaptiveAvgPool1d(16)
 
         self.flatten = nn.Flatten(1)
         self.linear_t = LinearCompression()
@@ -61,8 +77,11 @@ class InferenceNetwork(sl.SwyftModule):
             d_f_w = A["d_f_w"] + A["n_f_w"]
         z_total = B["z_total"]
 
-        d_t = self.unet_t(d_t)
-        d_f_w = self.unet_f(d_f_w)
+        d_t, (_,_) = self.netw_t(d_t)
+        d_f_w, (_,_) = self.netw_f(d_f_w)
+        
+        d_t = self.pool(d_t)
+        d_f_w = self.pool(d_f_w)
 
         features_t = self.linear_t(self.flatten(d_t))
         features_f = self.linear_f(self.flatten(d_f_w))

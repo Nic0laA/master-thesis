@@ -1,7 +1,9 @@
 # Project specific files
 tmp_zarr*
+tmp_dir/
 slurm_output_*out
-scratch-data*
+scratch-data/*
+ml*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

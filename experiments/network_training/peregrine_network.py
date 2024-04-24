@@ -1,9 +1,14 @@
-
 import torch
 from torch import nn
 from torch.functional import F
+from toolz.dicttoolz import valmap
+
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 
 import swyft.lightning as sl
+
+# from swyft_module import SwyftModule
 
 import logging
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.WARNING)
@@ -11,7 +16,7 @@ logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.WARNIN
 
 
 class InferenceNetwork(sl.SwyftModule):
-    def __init__(self, conf):
+    def __init__(self, **conf):
         super().__init__()
         self.one_d_only = conf["one_d_only"]
         self.batch_size = conf["training_batch_size"]
@@ -49,8 +54,20 @@ class InferenceNetwork(sl.SwyftModule):
             )
             
         self.optimizer_init = sl.AdamOptimizerInit(lr=conf["learning_rate"])
+        
+        self.save_roc_path = conf["save_path"]
 
     def forward(self, A, B):
+        
+        # print ("A")
+        # print (type(A))
+        # print (A['d_t'].shape)
+        # print (A['d_f_w'].shape)
+# 
+        # print ("B")
+        # print (type(B))
+        # print (B['d_t'].shape)
+        # print (B['d_f_w'].shape)
         
         if self.noise_shuffling and A["d_t"].size(0) != 1:
             noise_shuffling = torch.randperm(self.batch_size)
@@ -61,15 +78,114 @@ class InferenceNetwork(sl.SwyftModule):
             d_f_w = A["d_f_w"] + A["n_f_w"]
         z_total = B["z_total"]
 
+        # print (d_t.shape)
+        # print (d_f_w.shape)
+
         d_t = self.unet_t(d_t)
         d_f_w = self.unet_f(d_f_w)
 
+        # print (d_t.shape)
+        # print (d_f_w.shape)
+        
         features_t = self.linear_t(self.flatten(d_t))
         features_f = self.linear_f(self.flatten(d_f_w))
         features = torch.cat([features_t, features_f], dim=1)
+
+        
         logratios_1d = self.logratios_1d(features, z_total)
+        
+        # print (features)
+        # print (z_total)
+        # print (logratios_1d)
+        
         return logratios_1d
         
+    def validation_step(self, batch, batch_idx):
+        loss = self._calc_loss(batch, randomized=False)
+        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.save_roc_curve(batch, batch_idx)
+        
+        return loss
+        
+    def save_roc_curve(self, batch, batch_idx):
+        
+        # print (f'Saving roc curve to {self.save_roc_path}')
+        
+        intrinsic_variables = [
+            'mass_ratio', 'chirp_mass', 'theta_jn', 'phase', 'tilt_1', 'tilt_2', 
+            'a_1', 'a_2', 'phi_12', 'phi_jl'
+        ]
+        extrinsic_variables = ['luminosity_distance', 'dec', 'ra', 'psi', 'geocent_time']
+        
+        if isinstance(
+            batch, list
+        ):  # multiple dataloaders provided, using second one for contrastive samples
+            A = batch[0]
+            B = batch[1]
+        else:  # only one dataloader provided, using same samples for constrative samples
+            A = batch
+            B = valmap(lambda z: torch.roll(z, 1, dims=0), A)
+
+        # Concatenate positive samples and negative (contrastive) examples
+        x = A
+        z = {}
+        for key in B:
+            z[key] = torch.cat([A[key], B[key]])
+
+        num_pos = len(list(x.values())[0])  # Number of positive examples
+        num_neg = len(list(z.values())[0]) - num_pos  # Number of negative examples
+
+        out = self(x, z)  # Evaluate network
+
+        logratios = self._get_logratios(
+            out
+        )  # Generates concatenated flattened list of all estimated log ratios
+        if logratios is not None:
+            y = torch.zeros_like(logratios)
+            y[:num_pos, ...] = 1
+            
+        # Use soft-max to convert logratios to probabilities
+        probabilities = nn.functional.softmax(logratios, dim=1)
+        
+        plt.figure()
+        for i,name in enumerate(intrinsic_variables):
+            
+            # Compute ROC curve
+            fpr, tpr, thresholds = roc_curve(y.cpu().numpy()[:,i], probabilities.detach().cpu().numpy()[:,i])
+            roc_auc = auc(fpr, tpr)  # Calculate area under the curve
+
+            # Plot ROC curve
+            plt.plot(fpr, tpr, lw=1, label=f'{name} (area = {roc_auc :0.2f})')
+
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic')
+        plt.legend(bbox_to_anchor=(1.7, 1), loc="upper right")
+        plt.savefig(self.save_roc_path + '_int.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        plt.figure()
+        for i, name in enumerate(extrinsic_variables):
+            
+            # Compute ROC curve
+            fpr, tpr, thresholds = roc_curve(y.cpu().numpy()[:,i+10], probabilities.detach().cpu().numpy()[:,i])
+            roc_auc = auc(fpr, tpr)  # Calculate area under the curve
+
+            # Plot ROC curve
+            plt.plot(fpr, tpr, lw=1, label=f'{name} (area = {roc_auc :0.2f})')
+
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic')
+        plt.legend(bbox_to_anchor=(1.7, 1), loc="upper right")
+        plt.savefig(self.save_roc_path + '_ext.png', dpi=300, bbox_inches='tight')
+        plt.close()
         
 # 1D Unet implementation below
 class DoubleConv(nn.Module):
@@ -213,3 +329,5 @@ class LinearCompression_2d(nn.Module):
 
     def forward(self, x):
         return self.sequential(x)
+
+

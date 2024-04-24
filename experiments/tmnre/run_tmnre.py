@@ -23,13 +23,13 @@ import swyft.lightning as sl
 import gw_parameters
 import peregrine_simulator
 from peregrine_simulator import Simulator
-import peregrine_network
-from peregrine_network import InferenceNetwork
+import resnet_network
+from resnet_network import InferenceNetwork
 
 import importlib
 importlib.reload(gw_parameters)
 importlib.reload(peregrine_simulator)
-importlib.reload(peregrine_network)
+importlib.reload(resnet_network)
 
 ############################################################################################
 #
@@ -39,7 +39,7 @@ importlib.reload(peregrine_network)
 
 # Set up log
 zarr_store_dirs = '/scratch-shared/scur2012/peregrine_data/tmnre_experiments'
-name_of_run = 'peregrine_copy_highSNR_v3'
+name_of_run = 'resnet_test_2'
 logger.add(f"{zarr_store_dirs}/{name_of_run}/run_log.txt")
 
 # Initialise configuration settings
@@ -75,7 +75,37 @@ obs_sample = sl.Sample(
 #
 ############################################################################################
 
-simulations_per_round = [30_000, 60_000, 90_000, 120_000, 120_000, 150_000, 150_000, 150_000]
+# simulations_per_round = [30_000, 60_000, 90_000, 120_000, 120_000, 150_000, 150_000, 150_000]
+
+simulations_per_round = [30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000]
+
+trainer_settings = dict(
+    min_epochs = 1,
+    max_epochs = 100,
+    early_stopping = 7,
+    num_workers = 8,
+    training_batch_size = 200,
+    validation_batch_size = 200,
+    train_split = 0.9,
+    val_split = 0.1
+)
+
+network_settings = dict(
+    # Peregrine
+    shuffling = True,
+    priors = dict(
+        int_priors = conf['priors']['int_priors'],
+        ext_priors = conf['priors']['ext_priors'],
+    ),
+    marginals = ((0, 1),),
+    one_d_only = True,
+    ifo_list = conf["waveform_params"]["ifo_list"],
+    learning_rate = 5e-4,
+    training_batch_size = trainer_settings['training_batch_size'],
+
+)
+
+network = InferenceNetwork(**network_settings)
 
 for rnd_id, number_of_simulations in enumerate(simulations_per_round):
 
@@ -156,38 +186,18 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
 
     logger.info(f'Initialising data loader for round {rnd_id+1}')
 
-    network_settings = dict(
-        min_epochs = 30,
-        max_epochs = 200,
-        early_stopping = 7,
-        learning_rate = 5e-4,
-        num_workers = 8,
-        training_batch_size = 256,
-        validation_batch_size = 256,
-        train_split = 0.9,
-        val_split = 0.1,
-        shuffling = True,
-        priors = dict(
-            int_priors = conf['priors']['int_priors'],
-            ext_priors = conf['priors']['ext_priors'],
-        ),
-        marginals = ((0, 1),),
-        one_d_only = True,
-        ifo_list = conf["waveform_params"]["ifo_list"],
-    )
-
     train_data = zarr_store.get_dataloader(
-        num_workers=network_settings['num_workers'],
-        batch_size=network_settings['training_batch_size'],
-        idx_range=[0, int(network_settings['train_split'] * len(zarr_store.data.z_int))],
+        num_workers=trainer_settings['num_workers'],
+        batch_size=trainer_settings['training_batch_size'],
+        idx_range=[0, int(trainer_settings['train_split'] * len(zarr_store.data.z_int))],
         on_after_load_sample=False,
     )
 
     val_data = zarr_store.get_dataloader(
-        num_workers=network_settings['num_workers'],
-        batch_size=network_settings['validation_batch_size'],
+        num_workers=trainer_settings['num_workers'],
+        batch_size=trainer_settings['validation_batch_size'],
         idx_range=[
-            int(network_settings['train_split'] * len(zarr_store.data.z_int)),
+            int(trainer_settings['train_split'] * len(zarr_store.data.z_int)),
             len(zarr_store.data.z_int) - 1,
         ],
         on_after_load_sample=None,
@@ -203,7 +213,7 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     early_stopping_callback = EarlyStopping(
         monitor="val_loss",
         min_delta=0.0,
-        patience=network_settings["early_stopping"],
+        patience=trainer_settings["early_stopping"],
         verbose=False,
         mode="min",
     )
@@ -226,8 +236,8 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     swyft_trainer = sl.SwyftTrainer(
         accelerator='gpu',
         devices=1,
-        min_epochs=network_settings["min_epochs"],
-        max_epochs=network_settings["max_epochs"],
+        min_epochs=trainer_settings["min_epochs"],
+        max_epochs=trainer_settings["max_epochs"],
         logger=logger_tbl,
         callbacks=[lr_monitor, early_stopping_callback, checkpoint_callback],
         enable_progress_bar = False
@@ -237,10 +247,7 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     
     logger.info(f'Initialising network for round {rnd_id+1}')
     
-    network = InferenceNetwork(network_settings)
-    
-    #from inference_utils import init_network
-    #network = init_network(network_settings)
+    # network = InferenceNetwork(network_settings)
 
     # Fit data to model
     
