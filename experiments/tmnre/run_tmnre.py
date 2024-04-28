@@ -17,19 +17,21 @@ torch.set_float32_matmul_precision('high')
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.utilities.seed import seed_everything as set_torch_seed
+from lightning_fabric.utilities.seed import seed_everything
 import swyft.lightning as sl
 
 import gw_parameters
 import peregrine_simulator
 from peregrine_simulator import Simulator
-import resnet_network
-from resnet_network import InferenceNetwork
+import peregrine_network
+from peregrine_network import InferenceNetwork
 
 import importlib
 importlib.reload(gw_parameters)
 importlib.reload(peregrine_simulator)
-importlib.reload(resnet_network)
+importlib.reload(peregrine_network)
+
+seed_everything(0)
 
 ############################################################################################
 #
@@ -39,7 +41,7 @@ importlib.reload(resnet_network)
 
 # Set up log
 zarr_store_dirs = '/scratch-shared/scur2012/peregrine_data/tmnre_experiments'
-name_of_run = 'resnet_test_2'
+name_of_run = 'unet_lowSNR'
 logger.add(f"{zarr_store_dirs}/{name_of_run}/run_log.txt")
 
 # Initialise configuration settings
@@ -75,17 +77,18 @@ obs_sample = sl.Sample(
 #
 ############################################################################################
 
-# simulations_per_round = [30_000, 60_000, 90_000, 120_000, 120_000, 150_000, 150_000, 150_000]
+simulations_per_round = [30_000, 60_000, 90_000, 120_000, 120_000, 150_000, 150_000, 150_000]
 
-simulations_per_round = [30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000]
+#simulations_per_round = [
+#    30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000]
 
 trainer_settings = dict(
     min_epochs = 1,
     max_epochs = 100,
     early_stopping = 7,
     num_workers = 8,
-    training_batch_size = 200,
-    validation_batch_size = 200,
+    training_batch_size = 100,
+    validation_batch_size = 100,
     train_split = 0.9,
     val_split = 0.1
 )
@@ -93,6 +96,7 @@ trainer_settings = dict(
 network_settings = dict(
     # Peregrine
     shuffling = True,
+    include_noise = True,
     priors = dict(
         int_priors = conf['priors']['int_priors'],
         ext_priors = conf['priors']['ext_priors'],
@@ -100,12 +104,12 @@ network_settings = dict(
     marginals = ((0, 1),),
     one_d_only = True,
     ifo_list = conf["waveform_params"]["ifo_list"],
-    learning_rate = 5e-4,
+    learning_rate = 5e-4, #3e-5,
     training_batch_size = trainer_settings['training_batch_size'],
 
 )
 
-network = InferenceNetwork(**network_settings)
+# network = InferenceNetwork(**network_settings)
 
 for rnd_id, number_of_simulations in enumerate(simulations_per_round):
 
@@ -247,7 +251,7 @@ for rnd_id, number_of_simulations in enumerate(simulations_per_round):
     
     logger.info(f'Initialising network for round {rnd_id+1}')
     
-    # network = InferenceNetwork(network_settings)
+    network = InferenceNetwork(**network_settings)
 
     # Fit data to model
     
