@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[8]:
 
 
 # Load simulation data
@@ -17,10 +17,8 @@ rnd_id = 1
 data_dir = f'/scratch-shared/scur2012/peregrine_data/bhardwaj2023/simulations_{run_name}_R{rnd_id}'
 # simulation_results = zarr.convenience.open(simulation_store_path)
 
-data_dir = '/scratch-shared/scur2012/peregrine_data/tmnre_experiments/peregrine_copy_highSNR_v3/simulations/round_1'
 
-
-# In[2]:
+# In[9]:
 
 
 # Data loader function
@@ -49,7 +47,7 @@ def load_data(data_dir, batch_size=64, train_test_split=0.9):
     return train_data, val_data
 
 
-# In[3]:
+# In[10]:
 
 
 # Transformer model 
@@ -169,7 +167,7 @@ class ViT(nn.Module):
 
 
 
-# In[4]:
+# In[11]:
 
 
 # Define Inference network
@@ -180,14 +178,7 @@ import torch.nn.functional as F
 
 class ViTInferenceNetwork(sl.SwyftModule):
     
-    def __init__(
-        self, 
-        batch_size, 
-        learning_rate,
-        num_classes_t,
-        num_classes_f,
-        mlp_dim_f,
-        ):
+    def __init__(self, batch_size, learning_rate):
         super().__init__()
         
         self.batch_size = batch_size
@@ -200,30 +191,30 @@ class ViTInferenceNetwork(sl.SwyftModule):
             seq_len = 8192,
             channels = 3,
             patch_size = 16,
-            num_classes = num_classes_t,
-            dim = 512,
-            depth = 7,
-            heads = 6,
-            mlp_dim = 1024,
-            dropout = 0.0,
-            emb_dropout = 0.0,
+            num_classes = 16,
+            dim = 1024,
+            depth = 6,
+            heads = 8,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
         )
         
         self.ViT_f = ViT(
             seq_len = 4096,
             channels = 6,
             patch_size = 16,
-            num_classes = num_classes_f,
-            dim = 512,
-            depth = 7,
-            heads = 6,
-            mlp_dim = mlp_dim_f,
-            dropout = 0,
-            emb_dropout = 0,
+            num_classes = 16,
+            dim = 1024,
+            depth = 6,
+            heads = 8,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
         )
         
         self.logratios_1d = sl.LogRatioEstimator_1dim(
-            num_features=num_classes_t+num_classes_f, num_params=int(self.num_params), varnames="z_total"
+            num_features=32, num_params=int(self.num_params), varnames="z_total"
         )
             
         self.optimizer_init = sl.AdamOptimizerInit(lr=learning_rate)
@@ -255,9 +246,139 @@ class ViTInferenceNetwork(sl.SwyftModule):
         
         return logratios_1d
     
+    
+class ViTInferenceNetwork_t(sl.SwyftModule):
+    
+    def __init__(
+        self, 
+        batch_size, 
+        learning_rate, 
+        patch_size, 
+        num_classes, 
+        dim, 
+        depth, 
+        heads,
+        mlp_dim,
+        dropout,
+        emb_dropout
+        ):
+        super().__init__()
+        
+        self.batch_size = batch_size
+        self.noise_shuffling = True
+        self.num_params = 15
+        self.marginals = (0,1),
+        self.include_noise = True
+
+        self.ViT_t = ViT(
+            seq_len = 8192,
+            channels = 3,
+            patch_size = patch_size,
+            num_classes = num_classes,
+            dim = dim,
+            depth = depth,
+            heads = heads,
+            mlp_dim = mlp_dim,
+            dropout = dropout,
+            emb_dropout = emb_dropout,
+        )
+               
+        self.logratios_1d = sl.LogRatioEstimator_1dim(
+            num_features=num_classes, num_params=int(self.num_params), varnames="z_total"
+        )
+            
+        self.optimizer_init = sl.AdamOptimizerInit(lr=learning_rate)
+
+    def forward(self, A, B):        
+                
+        if self.include_noise:
+                   
+            if self.noise_shuffling and A["d_t"].size(0) != 1:
+                noise_shuffling = torch.randperm(self.batch_size)
+                d_t = A["d_t"] + A["n_t"][noise_shuffling]
+                d_f_w = A["d_f_w"] + A["n_f_w"][noise_shuffling]
+            else:
+                d_t = A["d_t"] + A["n_t"]
+                d_f_w = A["d_f_w"] + A["n_f_w"]
+        
+        else:
+            d_t = A["d_t"]
+            d_f_w = A["d_f_w"]
+        
+        z_total = B["z_total"]
+
+        features = self.ViT_t(d_t)        
+        logratios_1d = self.logratios_1d(features, z_total)
+        
+        return logratios_1d
+    
+class ViTInferenceNetwork_f(sl.SwyftModule):
+    
+    def __init__(
+        self, 
+        batch_size, 
+        learning_rate, 
+        patch_size, 
+        num_classes, 
+        dim, 
+        depth, 
+        heads,
+        mlp_dim,
+        dropout,
+        emb_dropout
+        ):
+        super().__init__()
+        
+        self.batch_size = batch_size
+        self.noise_shuffling = True
+        self.num_params = 15
+        self.marginals = (0,1),
+        self.include_noise = True
+
+        self.ViT_f = ViT(
+            seq_len = 4096,
+            channels = 6,
+            patch_size = patch_size,
+            num_classes = num_classes,
+            dim = dim,
+            depth = depth,
+            heads = heads,
+            mlp_dim = mlp_dim,
+            dropout = dropout,
+            emb_dropout = emb_dropout,
+        )
+               
+        self.logratios_1d = sl.LogRatioEstimator_1dim(
+            num_features=num_classes, num_params=int(self.num_params), varnames="z_total"
+        )
+            
+        self.optimizer_init = sl.AdamOptimizerInit(lr=learning_rate)
+
+    def forward(self, A, B):        
+                
+        if self.include_noise:
+                   
+            if self.noise_shuffling and A["d_t"].size(0) != 1:
+                noise_shuffling = torch.randperm(self.batch_size)
+                d_t = A["d_t"] + A["n_t"][noise_shuffling]
+                d_f_w = A["d_f_w"] + A["n_f_w"][noise_shuffling]
+            else:
+                d_t = A["d_t"] + A["n_t"]
+                d_f_w = A["d_f_w"] + A["n_f_w"]
+        
+        else:
+            d_t = A["d_t"]
+            d_f_w = A["d_f_w"]
+        
+        z_total = B["z_total"]
+
+        features = self.ViT_f(d_f_w[:,:,:-1])
+        logratios_1d = self.logratios_1d(features, z_total)
+        
+        return logratios_1d
 
 
-# In[5]:
+# In[12]:
 
 
 # Define training function
@@ -274,16 +395,21 @@ from ray.tune.search.hyperopt import HyperOptSearch
 
 import torch.optim as optim
 
-def train_transformer_combined(config, data_dir=None):
+def train_transformer_f(config, data_dir=None):
     
     print (config)
     
-    net = ViTInferenceNetwork(        
+    net = ViTInferenceNetwork_f(        
         batch_size = config['batch_size'], 
-        learning_rate = config['learning_rate'],
-        num_classes_t = config['num_classes_t'], 
-        num_classes_f = config['num_classes_f'], 
-        mlp_dim_f = config['mlp_dim_f'], 
+        learning_rate = config['learning_rate'], 
+        patch_size = config['patch_size'], 
+        num_classes = config['num_classes'], 
+        dim = config['dim'], 
+        depth = config['depth'], 
+        heads = config['heads'],
+        mlp_dim = config['mlp_dim'],
+        dropout = config['dropout'],
+        emb_dropout = config['emb_dropout']
     )
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -356,7 +482,7 @@ def train_transformer_combined(config, data_dir=None):
     print("Finished Training")
 
 
-# In[6]:
+# In[13]:
 
 
 import os
@@ -367,20 +493,30 @@ def main(num_samples=10, max_num_epochs=10):
     data_dir = os.path.abspath(f"/scratch-shared/scur2012/peregrine_data/bhardwaj2023/simulations_{run_name}_R{rnd_id}")
         
     config = {
-        "batch_size": tune.choice([64]),
-        "learning_rate": tune.choice([1.6e-4]),
-        "num_classes_t": tune.qrandint(8, 33, 4),
-        "num_classes_f": tune.qrandint(8, 33, 4),
-        "mlp_dim_f": tune.choice([1024,2048]),
+        "batch_size": tune.sample_from(lambda spec: spec.config.patch_size * 8),
+        "learning_rate": tune.loguniform(3e-5, 2e-4),
+        "patch_size": tune.choice([4,8,16]),
+        "num_classes": tune.choice([16, 24, 32]),
+        "dim": tune.choice([256, 512, 1024]),
+        "depth": tune.randint(4,10),
+        "heads": tune.randint(4,10),
+        "mlp_dim": tune.choice([1024, 2048]),
+        "dropout": tune.choice([0,0.05,0.1]),
+        "emb_dropout": tune.choice([0,0.05,0.1]),
         "max_num_epochs": max_num_epochs,
     }
     
     first_guess = [{
-        "batch_size": 64,
+        "batch_size": 32,
         "learning_rate": 1.6e-4,
-        "num_classes_t": 16,
-        "num_classes_f": 16,
-        "mlp_dim_f": 2048,
+        "patch_size": 4,
+        "num_classes": 24,
+        "dim": 512,
+        "depth": 7,
+        "heads": 6,
+        "mlp_dim": 2048,
+        "dropout": 0,
+        "emb_dropout": 0,
     }]
 
     scheduler = ASHAScheduler(
@@ -395,11 +531,7 @@ def main(num_samples=10, max_num_epochs=10):
     tune_config = TuneConfig(
         max_concurrent_trials=1,
         num_samples=num_samples,
-        search_alg=HyperOptSearch(
-            points_to_evaluate=first_guess, 
-            metric='loss', 
-            mode='min', 
-            n_initial_points=10),
+        search_alg=HyperOptSearch(points_to_evaluate=first_guess, metric='loss', mode='min'),
         scheduler=scheduler,
     )
     
@@ -409,7 +541,7 @@ def main(num_samples=10, max_num_epochs=10):
     )
     
     run_config = RunConfig(
-        name="transformer_combined",
+        name="transformer_f",
         storage_path='/home/scur2012/Thesis/master-thesis/experiments/tuning/ray_results',
         checkpoint_config=CheckpointConfig(checkpoint_score_attribute='loss', checkpoint_score_order='min'),
         log_to_file=True,
@@ -417,7 +549,7 @@ def main(num_samples=10, max_num_epochs=10):
     )
     
     # Create Tuner
-    trainable_with_cpu_gpu = tune.with_resources(partial(train_transformer_combined, data_dir=data_dir), {"cpu": 18, "gpu": 1})
+    trainable_with_cpu_gpu = tune.with_resources(partial(train_transformer_f, data_dir=data_dir), {"cpu": 18, "gpu": 1})
     tuner = Tuner(
         trainable_with_cpu_gpu,
         # Add some parameters to tune
@@ -430,11 +562,11 @@ def main(num_samples=10, max_num_epochs=10):
     
     # Run tuning job
     results = tuner.fit()
-    print(results.get_best_result(metric="loss", mode="min").config)
+    print(results.get_best_result(metric="loss", mode="min").config)   
 
 
-# In[7]:
+# In[14]:
 
 
-main(num_samples=20, max_num_epochs=20)
+main(num_samples=50, max_num_epochs=20)
 
