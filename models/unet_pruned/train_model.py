@@ -1,0 +1,107 @@
+
+import os
+import swyft.lightning as sl
+import torch
+torch.set_float32_matmul_precision('high')
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+
+import swyft.lightning as sl
+
+import argparse
+
+from model import InferenceNetwork, Unet, DoubleConv, Up, Down, OutConv, LinearCompression
+
+# Data loader function
+
+def load_data(data_dir, batch_size=64, train_test_split=0.9):
+    
+    zarr_store = sl.ZarrStore(f"{data_dir}")
+    
+    train_data = zarr_store.get_dataloader(
+        num_workers=8,
+        batch_size=batch_size,
+        idx_range=[0, int(train_test_split * len(zarr_store.data.z_int))],
+        on_after_load_sample=False
+    )
+
+    val_data = zarr_store.get_dataloader(
+        num_workers=8,
+        batch_size=batch_size,
+        idx_range=[
+            int(train_test_split * len(zarr_store.data.z_int)),
+            len(zarr_store.data.z_int) - 1,
+        ],
+        on_after_load_sample=None
+    )
+    
+    return train_data, val_data
+
+# Parse arguments
+parser = argparse.ArgumentParser()
+parser.add_argument('--prune_ratio')
+args = parser.parse_args()
+prune_ratio = args.prune_ratio
+
+# Set up the pytorch trainer settings
+
+# data_dir = '/scratch-shared/scur2012/training_data/default_limits_2e6/training_data'
+data_dir = '/scratch-shared/scur2012/peregrine_data/tmnre_experiments/unet_lowSNR/simulations/round_6'
+log_store_path = f'/scratch-shared/scur2012/trained_models/unet_pruned/ratio_{prune_ratio}/'
+
+lr_monitor = LearningRateMonitor(logging_interval=None)
+
+early_stopping_callback = EarlyStopping(
+    monitor="val_loss",
+    min_delta=0.0,
+    patience=7,
+    verbose=False,
+    mode="min",
+)
+checkpoint_callback = ModelCheckpoint(
+    monitor="val_loss",
+    dirpath=f"{log_store_path}",
+    filename="{epoch}-{step}_{val_loss:.2f}_{train_loss:.2f}",
+    mode="min",
+    # every_n_train_steps=1001,
+)
+
+# Make directory for logger
+logger_tbl = pl_loggers.TensorBoardLogger(
+    save_dir=f"{log_store_path}",
+    name=f"tb_logs",
+    version=None,
+    default_hp_metric=False,
+)
+
+swyft_trainer = sl.SwyftTrainer(
+    accelerator='gpu',
+    devices=1,
+    min_epochs=1,
+    max_epochs=100,
+    logger=logger_tbl,
+    callbacks=[lr_monitor, early_stopping_callback, checkpoint_callback],
+    enable_progress_bar = True,
+    # val_check_interval=1000,
+)
+
+# Load network model
+
+class InferenceNetworkPruned(InferenceNetwork):
+    def __init__(self, **conf):
+        super().__init__(**conf)
+        self.unet_t = torch.load(f'/home/scur2012/Thesis/master-thesis/experiments/pruning/unet_t_pruned_{conf['prune_ratio']}.pth')
+        self.unet_f = torch.load(f'/home/scur2012/Thesis/master-thesis/experiments/pruning/unet_f_pruned_{conf['prune_ratio']}.pth')
+
+network = InferenceNetworkPruned(batch_size=256, learning_rate=5e-4, prune_ratio=prune_ratio)
+
+# Fit data to model
+
+train_data, val_data = load_data(data_dir, batch_size=256, train_test_split=0.80)
+
+swyft_trainer.fit(
+    network, 
+    train_data, 
+    val_data, 
+)

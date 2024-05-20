@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[99]:
 
 
 # Load simulation data
@@ -20,7 +20,7 @@ data_dir = f'/scratch-shared/scur2012/peregrine_data/bhardwaj2023/simulations_{r
 data_dir = '/scratch-shared/scur2012/peregrine_data/tmnre_experiments/peregrine_copy_highSNR_v3/simulations/round_1'
 
 
-# In[2]:
+# In[100]:
 
 
 # Data loader function
@@ -49,7 +49,7 @@ def load_data(data_dir, batch_size=64, train_test_split=0.9):
     return train_data, val_data
 
 
-# In[3]:
+# In[101]:
 
 
 # Transformer model 
@@ -217,7 +217,7 @@ class TSTransformerEncoderClassiregressor(nn.Module):
         dim_feedforward, 
         num_classes,
         patch_size=16,
-        dropout=0.1, 
+        dropout=0.0, 
         pos_encoding='fixed', 
         activation='gelu', 
         norm='BatchNorm', 
@@ -228,7 +228,7 @@ class TSTransformerEncoderClassiregressor(nn.Module):
         assert (max_len % patch_size) == 0
 
         num_patches = max_len // patch_size
-        patch_dim = max_len * patch_size
+        patch_dim = feat_dim * patch_size
 
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (n p) -> b n (p c)', p = patch_size),
@@ -257,7 +257,7 @@ class TSTransformerEncoderClassiregressor(nn.Module):
 
         self.feat_dim = feat_dim
         self.num_classes = num_classes
-        self.output_layer = self.build_output_module(d_model, max_len, num_classes)
+        self.output_layer = self.build_output_module(d_model, num_patches, num_classes)
 
     def build_output_module(self, d_model, max_len, num_classes):
         output_layer = nn.Linear(d_model * max_len, num_classes)
@@ -265,7 +265,7 @@ class TSTransformerEncoderClassiregressor(nn.Module):
         # add F.log_softmax and use NLLoss
         return output_layer
 
-    def forward(self, X, padding_masks):
+    def forward(self, X):
         """
         Args:
             X: (batch_size, seq_length, feat_dim) torch tensor of masked features (input)
@@ -276,27 +276,18 @@ class TSTransformerEncoderClassiregressor(nn.Module):
 
         # permute because pytorch convention for transformers is [seq_length, batch_size, feat_dim]. padding_masks [batch_size, feat_dim]
         
-        print (X.shape)
-        
         inp = self.to_patch_embedding(X)
-        
-        print (inp.shape)
-        
-        inp = inp.permute(2, 0, 1)
-        
-        print (inp.shape)
-        
-        inp = self.project_inp(inp) * math.sqrt(self.d_model)  # [seq_length, batch_size, d_model] project input vectors to d_model dimensional space
-        
-        print (inp.shape)
-        
+        inp = inp.permute(1, 0, 2)
+        # inp = self.project_inp(inp) * math.sqrt(self.d_model)  # [seq_length, batch_size, d_model] project input vectors to d_model dimensional space
         inp = self.pos_enc(inp)  # add positional encoding
-                
-        print (inp.shape)
-                
+        
         # NOTE: logic for padding masks is reversed to comply with definition in MultiHeadAttention, TransformerEncoderLayer
-        output = self.transformer_encoder(inp, src_key_padding_mask=~padding_masks)  # (seq_length, batch_size, d_model)
-        output = self.act(output)  # the output transformer encoder/decoder embeddings don't include non-linearity        
+        
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        padding_masks = torch.ones(inp.shape[1], inp.shape[0]).to(torch.bool).to(device)
+        
+        output = self.transformer_encoder(inp, src_key_padding_mask=~padding_masks)  # (seq_length, batch_size, d_model)       
+        output = self.act(output)  # the output transformer encoder/decoder embeddings don't include non-linearity             
         output = output.permute(1, 0, 2)  # (batch_size, seq_length, d_model)
         output = self.dropout1(output)
         
@@ -308,7 +299,7 @@ class TSTransformerEncoderClassiregressor(nn.Module):
         return output
 
 
-# In[4]:
+# In[102]:
 
 
 # Define Inference network
@@ -392,9 +383,8 @@ class ViTInferenceNetwork(sl.SwyftModule):
         
         z_total = B["z_total"]
 
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        features_t = self.ViT_t(d_t, torch.ones(d_t.shape[0], d_t.shape[2]).to(torch.bool).to(device))
-        features_f = self.ViT_f(d_f_w[:,:,:-1], torch.ones(d_f_w[:,:,:-1].shape[0], d_f_w[:,:,:-1].shape[2]).to(torch.bool).to(device))
+        features_t = self.ViT_t(d_t)
+        features_f = self.ViT_f(d_f_w[:,:,:-1])
         
         features = torch.cat([features_t, features_f], dim=1)
         
@@ -404,7 +394,7 @@ class ViTInferenceNetwork(sl.SwyftModule):
     
 
 
-# In[5]:
+# In[103]:
 
 
 # Define training function
@@ -474,12 +464,6 @@ def train_transformer_mvts(config, data_dir=None):
             # print statistics
             running_loss += loss.item()
             epoch_steps += 1
-            #if i % 20 == 19:  # print every 20 mini-batches
-            #    print(
-            #        "[%d, %5d] loss: %.6f"
-            #        % (epoch + 1, i + 1, running_loss / epoch_steps)
-            #    )
-            #    running_loss = 0.0
 
         # Validation loss
         val_loss = 0.0
@@ -506,7 +490,7 @@ def train_transformer_mvts(config, data_dir=None):
     print("Finished Training")
 
 
-# In[6]:
+# In[104]:
 
 
 import os
@@ -517,26 +501,26 @@ def main(num_samples=10, max_num_epochs=10):
     data_dir = os.path.abspath(f"/scratch-shared/scur2012/peregrine_data/bhardwaj2023/simulations_{run_name}_R{rnd_id}")
         
     config = dict(
-        batch_size = tune.choice([1]),
-        learning_rate = tune.choice([1e-3, 3e-4, 1e-4]),
-        d_model = tune.choice([128,256,512]),
-        n_heads = tune.choice([4,8,16]),
-        num_layers = tune.choice([3,4,5,6,7,8]),
-        dim_feedforward = tune.choice([256,512,1024]),
-        dropout = tune.choice([0, 0.05, 0.1]),
+        batch_size = tune.choice([32,64]),
+        learning_rate = tune.loguniform(1e-5, 1e-3),
+        d_model = tune.choice([128]),
+        n_heads = tune.choice([4,8]),
+        num_layers = tune.choice([6]),
+        dim_feedforward = tune.choice([1024]),
+        dropout = tune.choice([0]),
         pos_encoding = tune.choice(['fixed','learnable']),
         max_num_epochs = max_num_epochs,
     )
     
     first_guess = [{
-        "batch_size": 1,
-        "learning_rate": 1e-3,
+        "batch_size": 32,
+        "learning_rate": 1e-4,
         "d_model": 128,
-        "n_heads": 8,
-        "num_layers": 3,
-        "dim_feedforward": 256,
-        "dropout": 0.1,
-        "pos_encoding": 'learnable',
+        "n_heads": 4,
+        "num_layers": 6,
+        "dim_feedforward": 1024,
+        "dropout": 0,
+        "pos_encoding": 'fixed',
     }]
 
     scheduler = ASHAScheduler(
@@ -589,17 +573,17 @@ def main(num_samples=10, max_num_epochs=10):
     print(results.get_best_result(metric="loss", mode="min").config)
 
 
-# In[7]:
+# In[105]:
 
 
-#main(num_samples=100, max_num_epochs=10)
+main(num_samples=20, max_num_epochs=10)
 
 
-# In[8]:
+# In[ ]:
 
 
 import sys
-#sys.exit()
+sys.exit()
 
 net = TSTransformerEncoderClassiregressor(
     feat_dim = 3,
@@ -617,12 +601,33 @@ net = TSTransformerEncoderClassiregressor(
     )
 
 trainloader, valloader = load_data(data_dir, batch_size=5, train_test_split=0.8)
-            
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 for i, data in enumerate(trainloader, 0):
 
+    net.to(device)
     # forward + backward + optimize
-    out = net(data['d_t'], torch.ones(data['d_t'].shape[0], data['d_t'].shape[2]).to(torch.bool) )
+    out = net(data['d_t'].to(device))
     
     print (i)
 
+
+
+# In[ ]:
+
+
+max_len = 8192
+patch_size = 16
+
+num_patches = max_len // patch_size
+patch_dim = 3 * patch_size
+
+
+to_patch_embedding = nn.Sequential(
+            Rearrange('b c (n p) -> b n (p c)', p = 16),
+            nn.LayerNorm(patch_dim),
+            nn.Linear(patch_dim, 128),
+            nn.LayerNorm(128),
+        )
 

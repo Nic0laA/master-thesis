@@ -16,6 +16,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('zarr_store', type=str, help='Location of zarr store')
+    parser.add_argument('--n_simulations', type=int, help='Number of simulations requested')
 
     par_names = gw_parameters.intrinsic_variables + gw_parameters.extrinsic_variables
     for param in par_names:
@@ -47,9 +48,14 @@ if __name__ == "__main__":
 
     zarr_store = sl.ZarrStore(f"{simulation_store_path}")
 
-    while zarr_store.sims_required > 0:
-        zarr_store.simulate(
-            sampler=swyft_simulator,
-            batch_size=chunk_size,
-            max_sims=chunk_size,
-        )
+    # if args.n_simulations is not None:
+    #     simulations_remaining = max(0, zarr_store.sims_required - args.n_simulations)
+    # else:
+    #     simulations_remaining = 0
+
+    # while zarr_store.sims_required > simulations_remaining:
+    zarr_store.simulate(
+        sampler=swyft_simulator,
+        batch_size=chunk_size,
+        max_sims=args.n_simulations,
+    )

@@ -1,9 +1,12 @@
 
+import numpy as np
 import torch
 from torch import nn
 from torch.functional import F
 
 import swyft.lightning as sl
+
+from toolz.dicttoolz import valmap
 
 import logging
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.WARNING)
@@ -70,6 +73,63 @@ class InferenceNetwork(sl.SwyftModule):
         logratios_1d = self.logratios_1d(features, z_total)
         return logratios_1d
         
+    def _calc_loss(self, batch, randomized=True):
+        """Calcualte batch-averaged loss summed over ratio estimators.
+
+        Note: The expected loss for an untrained classifier (with f = 0) is
+        subtracted.  The initial loss is hence usually close to zero.
+        """
+        if isinstance(
+            batch, list
+        ):  # multiple dataloaders provided, using second one for contrastive samples
+            A = batch[0]
+            B = batch[1]
+        else:  # only one dataloader provided, using same samples for constrative samples
+            A = batch
+            B = valmap(lambda z: torch.roll(z, 1, dims=0), A)
+
+        # Concatenate positive samples and negative (contrastive) examples
+        x = A
+        z = {}
+        for key in B:
+            z[key] = torch.cat([A[key], B[key]])
+
+        num_pos = len(list(x.values())[0])  # Number of positive examples
+        num_neg = len(list(z.values())[0]) - num_pos  # Number of negative examples
+
+        limits = torch.Tensor(
+            [0.1, 0.1, 0.05, 1, 0.1, 
+            0.2, 0.05, 0.1, 2, 0.1,
+            5, 0.01, 0.005, 0.2, 0.0001]
+        ).to(self.device)
+        diff = abs(A['z_total'] - B['z_total'])
+        softlabels = 1 - diff / limits
+        softlabels[softlabels<0] = 0
+
+        out = self(x, z)  # Evaluate network
+        loss_tot = 0
+
+        logratios = self._get_logratios(
+            out
+        )  # Generates concatenated flattened list of all estimated log ratios
+        if logratios is not None:
+            y = torch.zeros_like(logratios)
+            y[:num_pos, ...] = 1
+            y[num_pos:, ...] = softlabels
+            pos_weight = torch.ones_like(logratios[0]) * num_neg / num_pos
+            loss = F.binary_cross_entropy_with_logits(
+                logratios, y, reduction="none", pos_weight=pos_weight
+            )
+            num_ratios = loss.shape[1]
+            loss = loss.sum() / num_neg  # Calculates batched-averaged loss
+            loss = loss - 2 * np.log(2.0) * num_ratios
+            loss_tot += loss
+
+        aux_losses = self._get_aux_losses(out)
+        if aux_losses is not None:
+            loss_tot += aux_losses.sum()
+
+        return loss_tot
         
 # 1D Unet implementation below
 class DoubleConv(nn.Module):
