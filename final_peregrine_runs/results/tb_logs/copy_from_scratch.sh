@@ -2,7 +2,10 @@
 
 scratch_dir="/scratch-shared/scur2012/final_peregrine_runs"
 
-for run in AttentionUNet UNet_original UNet_pruned0 UNet_pruned10 UNet_pruned5 ViT ViT_pretrained; do
+# for run in AttentionUNet UNet_original UNet_pruned0 UNet_pruned10 UNet_pruned5 ViT ViT_pretrained; do
+#for run in UNet_NoReinit UNet_original_2 AttentionUNet_2 UNet_Softloss ViT_pretrained_2; do
+#for run in UNet_original_half; do
+for run in UNet_pruned5_2; do
 
     if [ ! -d ${run} ]; then
         mkdir -p ${run}
